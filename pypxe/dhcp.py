@@ -175,6 +175,32 @@ class DHCPD:
                 return decode(from_host + offset)
         raise OutOfLeasesError('Ran out of IP addresses to lease!')
 
+    def get_pxe_filename(self, opt53, client_mac):
+        '''
+            This method returns the filename that the PXE client should download
+            from the file server and execute.
+        '''
+
+        filename = self.get_namespaced_static('dhcp.binding.{0}.rom'.format(self.get_mac(client_mac)))
+        if not filename:
+            if not self.ipxe or not self.leases[client_mac]['ipxe']:
+                # http://www.syslinux.org/wiki/index.php/PXELINUX#UEFI
+                if 'options' in self.leases[client_mac] and 93 in self.leases[client_mac]['options'] and not self.force_file_name:
+                    [arch] = struct.unpack("!H", self.leases[client_mac]['options'][93][0])
+                    filename = {0: 'pxelinux.0', # BIOS/default
+                                6: 'syslinux.efi32', # EFI IA32
+                                7: 'syslinux.efi64', # EFI BC, x86-64
+                                9: 'syslinux.efi64'  # EFI x86-64
+                                }[arch]
+                else:
+                    filename = self.file_name
+            else:
+                filename = 'chainload.kpxe' # chainload iPXE
+                if opt53 == 5: # ACK
+                    self.leases[client_mac]['ipxe'] = False
+
+        return filename
+
     def tlv_encode(self, tag, value):
         '''Encode a TLV option.'''
         if type(value) is str:
@@ -269,23 +295,7 @@ class DHCPD:
         response += self.tlv_encode(66, self.file_server)
 
         # file_name null terminated
-        filename = self.get_namespaced_static('dhcp.binding.{0}.rom'.format(self.get_mac(client_mac)))
-        if not filename:
-            if not self.ipxe or not self.leases[client_mac]['ipxe']:
-                # http://www.syslinux.org/wiki/index.php/PXELINUX#UEFI
-                if 'options' in self.leases[client_mac] and 93 in self.leases[client_mac]['options'] and not self.force_file_name:
-                    [arch] = struct.unpack("!H", self.leases[client_mac]['options'][93][0])
-                    filename = {0: 'pxelinux.0', # BIOS/default
-                                6: 'syslinux.efi32', # EFI IA32
-                                7: 'syslinux.efi64', # EFI BC, x86-64
-                                9: 'syslinux.efi64'  # EFI x86-64
-                                }[arch]
-                else:
-                    filename = self.file_name
-            else:
-                filename = 'chainload.kpxe' # chainload iPXE
-                if opt53 == 5: # ACK
-                    self.leases[client_mac]['ipxe'] = False
+        filename = self.get_pxe_filename(opt53, client_mac)
         response += self.tlv_encode(67, filename.encode('ascii') + b'\x00')
 
         if self.mode_proxy:
