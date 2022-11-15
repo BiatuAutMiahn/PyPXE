@@ -154,15 +154,21 @@ class DHCPD:
         to_host = encode(self.offer_to)
 
         # pull out already leased IPs
-        leased = [self.leases[i]['ip'] for i in self.leases
-                if self.leases[i]['expire'] > time()]
+        reserved = [self.leases[i]['ip'] for i in self.leases
+                    if self.leases[i]['expire'] > time()]
+
+        # pull out already-allocated IPs
+        static_ips = [b["ipaddr"] for _, b in self.get_namespaced_static('dhcp.binding').items() if "ipaddr" in b]
+        reserved.extend(static_ips)
+
+        print(f"MUPUF: reserved = {reserved}", file=sys.stderr)
 
         # convert to 32-bit int
-        leased = map(encode, leased)
+        reserved = map(encode, reserved)
 
-        # loop through, make sure not already leased and not in form X.Y.Z.0
+        # loop through, make sure not already reserved and not in form X.Y.Z.0
         for offset in range(to_host - from_host):
-            if (from_host + offset) % 256 and from_host + offset not in leased:
+            if (from_host + offset) % 256 and from_host + offset not in reserved:
                 return decode(from_host + offset)
         raise OutOfLeasesError('Ran out of IP addresses to lease!')
 
