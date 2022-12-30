@@ -28,7 +28,8 @@ class Client:
         self.netboot_directory = parent.netboot_directory
         self.logger.debug('Receiving request...')
         self.retries = self.default_retries
-        self.block = 1
+        self.curr_block = 1
+        self.ack_block = 1
         self.blksize = 512
         self.sent_time = float('inf')
         self.dead = False
@@ -36,12 +37,17 @@ class Client:
         self.filename = ''
         self.wrap = 0
         self.arm_wrap = False
+        self.windowsize = 20
         self.handle() # message from the main socket
 
     def ready(self):
         '''Called when there is something to be read on our socket.'''
         self.message = self.sock.recv(1024)
         self.handle()
+
+    def send_blocks(self):
+        for _ in range(self.windowsize):
+            self.send_block()
 
     def send_block(self):
         '''
@@ -50,23 +56,29 @@ class Client:
         '''
         data = None
         try:
-            self.fh.seek(self.blksize * (self.block - 1))
+            self.fh.seek(self.blksize * (self.curr_block - 1))
             data = self.fh.read(self.blksize)
         except:
-            self.logger.error('Error while reading block {0}'.format(self.block))
+            self.logger.error('Error while reading block {0}'.format(self.curr_block))
             self.dead = True
             return
         # opcode 3 == DATA, wraparound block number
-        response = struct.pack('!HH', 3, self.block % 65536)
+        response = struct.pack('!HH', 3, self.curr_block % 65536)
         response += data
         self.sock.sendto(response, self.address)
-        self.logger.debug('Sending block {0}/{1}'.format(self.block, self.lastblock))
+        self.logger.debug('Sending block {0}/{1}'.format(self.curr_block, self.lastblock))
         self.retries -= 1
         self.sent_time = time.time()
+        if self.curr_block == self.lastblock:
+            self.logger.info('Completed sending {0}'.format(self.filename))
+            self.complete()
+        else:
+            self.curr_block += 1
 
     def no_ack(self):
         '''Determines if we timed out waiting for an ACK from the client.'''
         if self.sent_time + self.timeout < time.time():
+            self.curr_block = self.ack_block
             return True
         return False
 
@@ -106,7 +118,10 @@ class Client:
             block based on the filesize and blocksize.
         '''
         options = self.message.split(b'\x00')[2: -1]
+        self.logger.debug(f"Raw message: {self.message}")
+        self.logger.debug(f"Options: {options}")
         options = dict(zip((i.decode('ascii') for i in options[0::2]), map(int, options[1::2])))
+        self.logger.debug(f"Parsed options: {options}")
         self.changed_blksize = 'blksize' in options
         if self.changed_blksize:
             self.blksize = options['blksize']
@@ -115,9 +130,9 @@ class Client:
         if self.filesize > (2 ** 16) * self.blksize:
             self.logger.warning('Request too big, attempting transfer anyway.')
             self.logger.debug('Details: Filesize {0} is too big for blksize {1}.'.format(self.filesize, self.blksize))
+
         if len(options):
             # we need to know later if we actually had any options
-            self.block = 0
             return True
         else:
             return False
@@ -131,6 +146,9 @@ class Client:
             response += str(self.blksize).encode('ascii') + b'\x00'
         if self.tsize:
             response += b'tsize' + b'\x00'
+            response += str(self.filesize).encode('ascii') + b'\x00'
+        if self.windowsize > 1:
+            response += b'windowsize' + b'\x00'
             response += str(self.filesize).encode('ascii') + b'\x00'
         self.sock.sendto(response, self.address)
 
@@ -155,8 +173,8 @@ class Client:
         self.logger.info('File {0} ({1} bytes) requested'.format(self.filename, self.filesize))
         if not self.parse_options():
             # no options received so start transfer
-            if self.block == 1:
-                self.send_block()
+            #if self.curr_block == 1:
+            #    self.send_blocks()
             return
         self.reply_options() # we received some options so ACK those first
 
@@ -209,20 +227,15 @@ class Client:
                 self.arm_wrap = False
             if block == 32768:
                 self.arm_wrap = True
-            if block < self.block % 65536:
-                self.logger.warning('Ignoring duplicated ACK received for block {0}'.format(self.block))
-            elif block > self.block % 65536:
-                self.logger.warning('Ignoring out of sequence ACK received for block {0}'.format(self.block))
-            elif block + self.wrap * 65536 == self.lastblock:
-                if self.filesize % self.blksize == 0:
-                    self.block = block + 1
-                    self.send_block()
-                self.logger.info('Completed sending {0}'.format(self.filename))
-                self.complete()
+            if block < self.ack_block % 65536:
+                self.logger.warning('Ignoring duplicated ACK received for block {0}'.format(block))
+                self.send_blocks()
+            elif block > self.ack_block % 65536:
+                self.logger.warning('Ignoring out of sequence ACK received for block {0}'.format(block))
             else:
-                self.block = block + 1
+                self.ack_block = block + 1
                 self.retries = self.default_retries
-                self.send_block()
+                self.send_blocks()
         elif opcode == 2:
             # write request
             self.sock = ParentSocket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -250,6 +263,7 @@ class TFTPD:
         self.default_retries = server_settings.get('default_retries', 3)
         self.timeout = server_settings.get('timeout', 5)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setblocking(0)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.ip, self.port))
 
@@ -282,7 +296,7 @@ class TFTPD:
             for client in self.ongoing:
                 if client.dead:
                     self.ongoing.remove(client)
-            rlist, _, _ = select.select([self.sock] + [client.sock for client in self.ongoing if not client.dead], [], [], 1)
+            rlist, _, _ = select.select([self.sock] + [client.sock for client in self.ongoing if not client.dead], [], [], 0)
             for sock in rlist:
                 if sock == self.sock:
                     # main socket, so new client
