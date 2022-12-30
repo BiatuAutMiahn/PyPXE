@@ -149,7 +149,7 @@ class Client:
             response += str(self.filesize).encode('ascii') + b'\x00'
         if self.windowsize > 1:
             response += b'windowsize' + b'\x00'
-            response += str(self.filesize).encode('ascii') + b'\x00'
+            response += str(self.windowsize).encode('ascii') + b'\x00'
         self.sock.sendto(response, self.address)
 
     def new_request(self):
