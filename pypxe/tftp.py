@@ -28,8 +28,10 @@ class Client:
         self.netboot_directory = parent.netboot_directory
         self.logger.debug('Receiving request...')
         self.retries = self.default_retries
+        # We always start sending from block 1
         self.curr_block = 1
-        self.ack_block = 1
+        # We expect an ack for block 0 (server OACK)
+        self.ack_block = 0
         self.blksize = 512
         self.sent_time = float('inf')
         self.dead = False
@@ -55,6 +57,8 @@ class Client:
             variables accordingly.
         '''
         data = None
+        if self.dead:
+            return
         try:
             self.fh.seek(self.blksize * (self.curr_block - 1))
             data = self.fh.read(self.blksize)
