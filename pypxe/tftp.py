@@ -40,6 +40,8 @@ class Client:
         self.wrap = 0
         self.arm_wrap = False
         self.windowsize = 20
+        self.parent = parent
+        self.parent.init_progress(self.address[0])
         self.handle() # message from the main socket
 
     def ready(self):
@@ -73,6 +75,9 @@ class Client:
         self.logger.debug('Sending block {0}/{1}'.format(self.curr_block, self.lastblock))
         self.retries -= 1
         self.sent_time = time.time()
+        self.parent.progress[self.address[0]]["last_activity"] = self.sent_time
+        self.parent.progress[self.address[0]]["files"][self.filename] = (
+            self.curr_block/self.lastblock)
         if self.curr_block == self.lastblock:
             self.logger.info('Completed sending {0}'.format(self.filename))
             self.complete()
@@ -270,6 +275,7 @@ class TFTPD:
         self.sock.setblocking(0)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((self.ip, self.port))
+        self.progress = {}
 
         # setup logger
         if self.logger == None:
@@ -315,3 +321,12 @@ class TFTPD:
                 if client.no_retries():
                     client.logger.info('Timeout while sending {0}'.format(client.filename))
                     client.complete()
+
+    def init_progress(self, address):
+        if address in self.progress:
+            return
+        else:
+            self.progress[address] = {
+                "files": {},
+                "last_activity": time.time()
+            }
