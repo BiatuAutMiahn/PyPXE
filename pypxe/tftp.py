@@ -39,7 +39,7 @@ class Client:
         self.filename = ''
         self.wrap = 0
         self.arm_wrap = False
-        self.windowsize = 20
+        self.windowsize = parent.windowsize
         self.parent = parent
         self.parent.init_progress(self.address[0])
         self.handle() # message from the main socket
@@ -271,6 +271,7 @@ class TFTPD:
         self.logger = server_settings.get('logger', None)
         self.default_retries = server_settings.get('default_retries', 3)
         self.timeout = server_settings.get('timeout', 5)
+        self.windowsize = server_settings.get('windowsize', 20)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setblocking(0)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
