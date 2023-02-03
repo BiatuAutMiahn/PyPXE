@@ -182,8 +182,8 @@ class DHCPD:
         if not filename:
             if not self.ipxe or not self.leases[client_mac]['ipxe']:
                 # http://www.syslinux.org/wiki/index.php/PXELINUX#UEFI
-                if 'options' in self.leases[client_mac] and 93 in self.leases[client_mac]['options'] and not self.file_name:
-                    [arch] = struct.unpack("!H", self.leases[client_mac]['options'][93][0])
+                if 93 in self.options and not self.file_name:
+                    [arch] = struct.unpack("!H", self.options[93][0])
                     filename = {0: 'pxelinux.0', # BIOS/default
                                 6: 'syslinux.efi32', # EFI IA32
                                 7: 'syslinux.efi64', # EFI BC, x86-64
