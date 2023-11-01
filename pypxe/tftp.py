@@ -274,7 +274,11 @@ class TFTPD:
         self.windowsize = server_settings.get('windowsize', 20)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setblocking(0)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sockopts = server_settings.get(
+            'sockopts',
+            [(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)])
+        for opt in sockopts:
+            self.sock.setsockopt(*opt)
         self.sock.bind((self.ip, self.port))
         self.progress = {}
 
