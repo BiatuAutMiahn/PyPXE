@@ -81,7 +81,7 @@ class DHCPD:
         if self.ipxe and self.http:
             self.file_name = 'http://{0}/{1}'.format(self.file_server, self.file_name)
         if self.ipxe and not self.http:
-            self.file_name = 'tftp://{0}/{1}'.format(self.file_server, self.file_name)
+            self.file_name = '{0}'.format(self.file_server, self.file_name)
 
         self.logger.debug('NOTICE: DHCP server started in debug mode. DHCP server is using the following:')
         self.logger.info('DHCP Server IP: {0}'.format(self.ip))
