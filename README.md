@@ -5,6 +5,13 @@ This repository contains code that provides a working PXE server (via HTTP, TFTP
 
 ## Usage
 
+### Fast QuickStart (with an external DHCP server and without changing the configuration of the DHCP server) 
+Clone this repository and create a new folder inside called `netboot.local`. Copy to this folder the PXE payload to boot the clients. For example `netboot.xyz-undionly.kpxe` and name it (or use a link) `chainload.kpxe`. After that execute:
+```
+sudo python3 -m pypxe.server --dhcp-proxy --ipxe --netboot-dir netboot.local --netboot-file chainload.kpxe --dhcp-server-ip 192.168.1.1 --dhcp-fileserver 192.168.1.77 --verbose all
+```
+Where the IP address `192.168.1.1` is the DCHP server and GATEWAY of your LAN (that is not supporting PXE/BOOTP boots) and `192.168.1.77` is the address of the computer where you run this server. After that you can LAN boot all devices without touching anything else.
+
 ### Using PyPXE as a Library
 PyPXE implements the following services for the purpose of creating a Python-based PXE environment: TFTP, HTTP, and DHCP. Each PyPXE service must be imported individually. For example, to import the TFTP service simply use:
 ```python

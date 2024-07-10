@@ -46,11 +46,6 @@ class DHCPD:
 
         self.file_server = server_settings.get('file_server', '192.168.2.2')
         self.file_name = server_settings.get('file_name', '')
-        if not self.file_name:
-            self.force_file_name = False
-            self.file_name = 'pxelinux.0'
-        else:
-            self.force_file_name = True
         self.ipxe = server_settings.get('use_ipxe', False)
         self.http = server_settings.get('use_http', False)
         self.mode_proxy = server_settings.get('mode_proxy', False) # ProxyDHCP mode
@@ -78,10 +73,6 @@ class DHCPD:
 
         if self.http and not self.ipxe:
             self.logger.warning('HTTP selected but iPXE disabled. PXE ROM must support HTTP requests.')
-        if self.ipxe and self.http:
-            self.file_name = 'http://{0}/{1}'.format(self.file_server, self.file_name)
-        if self.ipxe and not self.http:
-            self.file_name = 'tftp://{0}/{1}'.format(self.file_server, self.file_name)
 
         self.logger.debug('NOTICE: DHCP server started in debug mode. DHCP server is using the following:')
         self.logger.info('DHCP Server IP: {0}'.format(self.ip))
@@ -163,17 +154,62 @@ class DHCPD:
         to_host = encode(self.offer_to)
 
         # pull out already leased IPs
-        leased = [self.leases[i]['ip'] for i in self.leases
-                if self.leases[i]['expire'] > time()]
+        reserved = [self.leases[i]['ip'] for i in self.leases
+                    if self.leases[i]['expire'] > time()]
+
+        # pull out already-allocated IPs
+        static_ips = [b["ipaddr"] for _, b in self.get_namespaced_static('dhcp.binding').items() if "ipaddr" in b]
+        reserved.extend(static_ips)
+
+        print(f"MUPUF: reserved = {reserved}", file=sys.stderr)
 
         # convert to 32-bit int
-        leased = map(encode, leased)
+        reserved = map(encode, reserved)
 
-        # loop through, make sure not already leased and not in form X.Y.Z.0
+        # loop through, make sure not already reserved and not in form X.Y.Z.0
         for offset in range(to_host - from_host):
-            if (from_host + offset) % 256 and from_host + offset not in leased:
+            if (from_host + offset) % 256 and from_host + offset not in reserved:
                 return decode(from_host + offset)
         raise OutOfLeasesError('Ran out of IP addresses to lease!')
+
+    def get_pxe_filename(self, opt53, client_mac):
+        '''
+            This method returns the filename that the PXE client should download
+            from the file server and execute.
+        '''
+
+        filename = self.get_namespaced_static('dhcp.binding.{0}.rom'.format(self.get_mac(client_mac)))
+        if not filename:
+            if not self.ipxe or not self.leases[client_mac]['ipxe']:
+                # http://www.syslinux.org/wiki/index.php/PXELINUX#UEFI
+                if 93 in self.options and not self.file_name:
+                    [arch] = struct.unpack("!H", self.options[93][0])
+                    filename = {0: 'pxelinux.0', # BIOS/default
+                                6: 'syslinux.efi32', # EFI IA32
+                                7: 'syslinux.efi64', # EFI BC, x86-64
+                                9: 'syslinux.efi64'  # EFI x86-64
+                                }[arch]
+                else:
+                    filename = self.file_name
+            else:
+                filename = 'chainload.kpxe' # chainload iPXE
+                if opt53 == 5: # ACK
+                    self.leases[client_mac]['ipxe'] = False
+
+        return filename
+
+    def get_bootp_filename(self):
+        '''
+            This method returns the URL to the file that the BOOTP client should
+            download and execute.
+        '''
+
+        filename = self.file_name if self.file_name else 'pxelinux.0'
+
+        if self.ipxe and self.http:
+            return 'http://{0}/{1}'.format(self.file_server, filename)
+        elif self.ipxe and not self.http:
+            return 'tftp://{0}/{1}'.format(self.file_server, filename)
 
     def tlv_encode(self, tag, value):
         '''Encode a TLV option.'''
@@ -238,8 +274,9 @@ class DHCPD:
         # BOOTP legacy pad
         response += b'\x00' * 64 # server name
         if self.mode_proxy:
-            response += self.file_name.encode('ascii')
-            response += b'\x00' * (128 - len(self.file_name))
+            filename = self.get_bootp_filename()
+            response += filename.encode('ascii')
+            response += b'\x00' * (128 - len(filename))
         else:
             response += b'\x00' * 128
         response += self.magic # magic section
@@ -269,23 +306,7 @@ class DHCPD:
         response += self.tlv_encode(66, self.file_server)
 
         # file_name null terminated
-        filename = self.get_namespaced_static('dhcp.binding.{0}.rom'.format(self.get_mac(client_mac)))
-        if not filename:
-            if not self.ipxe or not self.leases[client_mac]['ipxe']:
-                # http://www.syslinux.org/wiki/index.php/PXELINUX#UEFI
-                if 'options' in self.leases[client_mac] and 93 in self.leases[client_mac]['options'] and not self.force_file_name:
-                    [arch] = struct.unpack("!H", self.leases[client_mac]['options'][93][0])
-                    filename = {0: 'pxelinux.0', # BIOS/default
-                                6: 'syslinux.efi32', # EFI IA32
-                                7: 'syslinux.efi64', # EFI BC, x86-64
-                                9: 'syslinux.efi64'  # EFI x86-64
-                                }[arch]
-                else:
-                    filename = self.file_name
-            else:
-                filename = 'chainload.kpxe' # chainload iPXE
-                if opt53 == 5: # ACK
-                    self.leases[client_mac]['ipxe'] = False
+        filename = self.get_pxe_filename(opt53, client_mac)
         response += self.tlv_encode(67, filename.encode('ascii') + b'\x00')
 
         if self.mode_proxy:
@@ -353,8 +374,8 @@ class DHCPD:
             self.logger.debug('<--BEGIN OPTIONS-->')
             self.logger.debug('{0}'.format(repr(self.options[client_mac])))
             self.logger.debug('<--END OPTIONS-->')
-            if not self.validate_req(client_mac):
-                continue
+            # if not self.validate_req(client_mac):
+            #     continue
             type = ord(self.options[client_mac][53][0]) # see RFC2131, page 10
             if type == TYPE_53_DHCPDISCOVER:
                 self.logger.debug('Sending DHCPOFFER to {0}'.format(self.get_mac(client_mac)))
